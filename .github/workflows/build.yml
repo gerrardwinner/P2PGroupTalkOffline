@@ -1,0 +1,437 @@
+name: Build Offline Forest Radio APK v2
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Forest Radio Project v2
+        run: |
+          python3 - << 'EOF'
+          import os
+          import textwrap
+
+          files = {
+              "settings.gradle": """
+                  rootProject.name = "ForestRadio"
+                  include ':app'
+              """,
+
+              "build.gradle": """
+                  buildscript {
+                      repositories {
+                          google()
+                          mavenCentral()
+                      }
+                      dependencies {
+                          classpath 'com.android.tools.build:gradle:8.1.4'
+                      }
+                  }
+                  allprojects {
+                      repositories {
+                          google()
+                          mavenCentral()
+                      }
+                  }
+              """,
+
+              "gradle.properties": """
+                  org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+                  android.useAndroidX=true
+              """,
+
+              "app/build.gradle": """
+                  plugins {
+                      id 'com.android.application'
+                  }
+
+                  android {
+                      namespace 'com.example.forestradio'
+                      compileSdk 34
+
+                      defaultConfig {
+                          applicationId "com.example.forestradio"
+                          minSdk 26
+                          targetSdk 34
+                          versionCode 2
+                          versionName "2.0"
+                      }
+
+                      buildTypes {
+                          release {
+                              minifyEnabled false
+                          }
+                      }
+                      compileOptions {
+                          sourceCompatibility JavaVersion.VERSION_17
+                          targetCompatibility JavaVersion.VERSION_17
+                      }
+                  }
+              """,
+
+              "app/src/main/AndroidManifest.xml": """
+                  <?xml version="1.0" encoding="utf-8"?>
+                  <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+                      <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+                      <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+                      <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+                      <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+                      <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+                      <uses-permission android:name="android.permission.RECORD_AUDIO" />
+                      <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+                      <uses-permission android:name="android.permission.INTERNET" />
+
+                      <application
+                          android:allowBackup="true"
+                          android:label="Forest Radio"
+                          android:icon="@android:drawable/ic_menu_mic"
+                          android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+                          <activity
+                              android:name=".MainActivity"
+                              android:exported="true">
+                              <intent-filter>
+                                  <action android:name="android.intent.action.MAIN" />
+                                  <category android:name="android.intent.category.LAUNCHER" />
+                              </intent-filter>
+                          </activity>
+
+                      </application>
+                  </manifest>
+              """,
+
+              "app/src/main/res/layout/activity_main.xml": """
+                  <?xml version="1.0" encoding="utf-8"?>
+                  <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+                      android:layout_width="match_parent"
+                      android:layout_height="match_parent"
+                      android:orientation="vertical"
+                      android:background="#1b2e1b"
+                      android:gravity="center"
+                      android:padding="24dp">
+
+                      <TextView
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:text="🌲 Offline Forest Radio (v2.0)"
+                          android:textColor="#a3e4d7"
+                          android:textSize="20sp"
+                          android:textStyle="bold"
+                          android:paddingBottom="8dp" />
+
+                      <TextView
+                          android:id="@+id/tv_status"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          text="สถานะ: พร้อมเชื่อมต่อ Wi-Fi Direct"
+                          android:textColor="#f9e79f"
+                          android:textSize="13sp"
+                          android:paddingBottom="24dp"
+                          android:gravity="center" />
+
+                      <Button
+                          android:id="@+id/btn_discover"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="🔍 1. ค้นหาและสร้างกลุ่ม Wi-Fi P2P"
+                          android:backgroundTint="#117a65"
+                          android:textColor="#ffffff"
+                          android:layout_marginBottom="30dp" />
+
+                      <!-- ปุ่มกดพูดคุย (Push-to-Talk) -->
+                      <Button
+                          android:id="@+id/btn_ptt"
+                          android:layout_width="200dp"
+                          android:layout_height="200dp"
+                          android:text="🎙️\\nกดค้างเพื่อพูด"
+                          android:textSize="18sp"
+                          android:textStyle="bold"
+                          android:textColor="#ffffff"
+                          android:backgroundTint="#c0392b"
+                          android:insetTop="0dp"
+                          android:insetBottom="0dp" />
+
+                  </LinearLayout>
+              """,
+
+              "app/src/main/java/com/example/forestradio/MainActivity.java": """
+                  package com.example.forestradio;
+
+                  import android.Manifest;
+                  import android.app.Activity;
+                  import android.content.BroadcastReceiver;
+                  import android.content.Context;
+                  import android.content.Intent;
+                  import android.content.IntentFilter;
+                  import android.content.pm.PackageManager;
+                  import android.media.AudioFormat;
+                  import android.media.AudioRecord;
+                  import android.media.AudioTrack;
+                  import android.media.MediaRecorder;
+                  import android.net.wifi.p2p.WifiP2pConfig;
+                  import android.net.wifi.p2p.WifiP2pDevice;
+                  import android.net.wifi.p2p.WifiP2pDeviceList;
+                  import android.net.wifi.p2p.WifiP2pInfo;
+                  import android.net.wifi.p2p.WifiP2pManager;
+                  import android.os.Bundle;
+                  import android.view.MotionEvent;
+                  import android.widget.Button;
+                  import android.widget.TextView;
+                  import androidx.core.app.ActivityCompat;
+                  import java.io.IOException;
+                  import java.net.DatagramPacket;
+                  import java.net.DatagramSocket;
+                  import java.net.InetAddress;
+                  import java.util.ArrayList;
+                  import java.util.List;
+
+                  public class MainActivity extends Activity {
+                      private WifiP2pManager manager;
+                      private WifiP2pManager.Channel channel;
+                      private BroadcastReceiver receiver;
+                      private IntentFilter intentFilter;
+
+                      private TextView tvStatus;
+                      private Button btnDiscover, btnPtt;
+
+                      private List<WifiP2pDevice> peers = new ArrayList<>();
+                      private WifiP2pInfo p2pInfo;
+                      private boolean isConnected = false;
+
+                      // Audio Configuration
+                      private static final int SAMPLE_RATE = 8000;
+                      private static final int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO;
+                      private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
+                      private boolean isRecording = false;
+                      private Thread audioReceiverThread;
+                      private DatagramSocket udpSocket;
+                      private static final int PORT = 50005;
+
+                      @Override
+                      protected void onCreate(Bundle savedInstanceState) {
+                          super.onCreate(savedInstanceState);
+                          setContentView(R.layout.activity_main);
+
+                          tvStatus = findViewById(R.id.tv_status);
+                          btnDiscover = findViewById(R.id.btn_discover);
+                          btnPtt = findViewById(R.id.btn_ptt);
+
+                          ActivityCompat.requestPermissions(this, new String[]{
+                                  Manifest.permission.ACCESS_FINE_LOCATION,
+                                  Manifest.permission.RECORD_AUDIO,
+                                  Manifest.permission.NEARBY_WIFI_DEVICES,
+                                  Manifest.permission.ACCESS_WIFI_STATE,
+                                  Manifest.permission.CHANGE_WIFI_STATE
+                          }, 101);
+
+                          manager = (WifiP2pManager) getSystemService(Context.WIFI_P2P_SERVICE);
+                          channel = manager.initialize(this, getMainLooper(), null);
+
+                          intentFilter = new IntentFilter();
+                          intentFilter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);
+                          intentFilter.addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION);
+                          intentFilter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
+
+                          btnDiscover.setOnClickListener(v -> discoverPeers());
+
+                          // ระบบกดพูด (Push-to-Talk)
+                          btnPtt.setOnTouchListener((v, event) -> {
+                              if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                                  if (isConnected) {
+                                      btnPtt.setText("🗣️ กำลังพูด...");
+                                      btnPtt.setBackgroundColor(android.graphics.Color.parseColor("#27ae60"));
+                                      startStreamingAudio();
+                                  } else {
+                                      tvStatus.setText("⚠️ ยังไม่ได้เชื่อมต่อกับเพื่อนในกลุ่ม");
+                                  }
+                                  return true;
+                              } else if (event.getAction() == MotionEvent.ACTION_UP) {
+                                  if (isRecording) {
+                                      stopStreamingAudio();
+                                      btnPtt.setText("🎙️\\nกดค้างเพื่อพูด");
+                                      btnPtt.setBackgroundColor(android.graphics.Color.parseColor("#c0392b"));
+                                  }
+                                  return true;
+                              }
+                              return false;
+                          });
+
+                          startAudioReceiver();
+                      }
+
+                      private void discoverPeers() {
+                          if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return;
+                          manager.discoverPeers(channel, new WifiP2pManager.ActionListener() {
+                              @Override
+                              public void onSuccess() { tvStatus.setText("สถานะ: กำลังค้นหาอุปกรณ์รอบตัว..."); }
+                              @Override
+                              public void onFailure(int reason) { tvStatus.setText("สถานะ: ค้นหาไม่สำเร็จ (รหัส " + reason + ")"); }
+                          });
+                      }
+
+                      private final WifiP2pManager.PeerListListener peerListListener = peerList -> {
+                          peers.clear();
+                          peers.addAll(peerList.getDeviceList());
+                          if (!peers.isEmpty()) {
+                              tvStatus.setText("พบอุปกรณ์: " + peers.get(0).deviceName + "\\nกำลังเชื่อมต่อ...");
+                              connectToDevice(peers.get(0));
+                          } else {
+                              tvStatus.setText("สถานะ: ไม่พบอุปกรณ์ ลองกดค้นหาพร้อมกัน");
+                          }
+                      };
+
+                      private void connectToDevice(WifiP2pDevice device) {
+                          WifiP2pConfig config = new WifiP2pConfig();
+                          config.deviceAddress = device.deviceAddress;
+                          if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return;
+                          manager.connect(channel, config, new WifiP2pManager.ActionListener() {
+                              @Override
+                              public void onSuccess() { tvStatus.setText("สถานะ: กำลังเชื่อมต่อกับ " + device.deviceName); }
+                              @Override
+                              public void onFailure(int reason) { tvStatus.setText("สถานะ: เชื่อมต่อล้มเหลว"); }
+                          });
+                      }
+
+                      private final WifiP2pManager.ConnectionInfoListener connectionInfoListener = info -> {
+                          p2pInfo = info;
+                          if (info.groupFormed) {
+                              isConnected = true;
+                              tvStatus.setText("สถานะ: เชื่อมต่อสำเร็จ! พร้อมใช้งานวิทยุ PTT");
+                          }
+                      };
+
+                      private void startStreamingAudio() {
+                          isRecording = true;
+                          new Thread(() -> {
+                              android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
+                              int bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT);
+                              if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return;
+                              AudioRecord recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT, bufferSize);
+
+                              byte[] buffer = new byte[bufferSize];
+                              recorder.startRecording();
+
+                              try {
+                                  DatagramSocket socket = new DatagramSocket();
+                                  InetAddress targetInet;
+                                  if (p2pInfo != null && p2pInfo.groupOwnerAddress != null) {
+                                      targetInet = p2pInfo.groupOwnerAddress;
+                                  } else {
+                                      targetInet = InetAddress.getByName("192.168.49.255"); // Broadcast IP ในวง Wi-Fi Direct
+                                  }
+
+                                  while (isRecording) {
+                                      int bytesRead = recorder.read(buffer, 0, buffer.length);
+                                      if (bytesRead > 0) {
+                                          DatagramPacket packet = new DatagramPacket(buffer, bytesRead, targetInet, PORT);
+                                          socket.send(packet);
+                                      }
+                                  }
+                                  socket.close();
+                              } catch (IOException e) {
+                                  e.printStackTrace();
+                              }
+                              recorder.stop();
+                              recorder.release();
+                          }).start();
+                      }
+
+                      private void stopStreamingAudio() {
+                          isRecording = false;
+                      }
+
+                      private void startAudioReceiver() {
+                          audioReceiverThread = new Thread(() -> {
+                              try {
+                                  udpSocket = new DatagramSocket(PORT);
+                                  byte[] buffer = new byte[1024];
+                                  int trackBufSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AUDIO_FORMAT);
+                                  AudioTrack track = new AudioTrack(
+                                          android.media.AudioManager.STREAM_MUSIC,
+                                          SAMPLE_RATE,
+                                          AudioFormat.CHANNEL_OUT_MONO,
+                                          AUDIO_FORMAT,
+                                          trackBufSize,
+                                          AudioTrack.MODE_STREAM
+                                  );
+                                  track.play();
+
+                                  while (true) {
+                                      DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                                      udpSocket.receive(packet);
+                                      track.write(packet.getData(), 0, packet.getLength());
+                                  }
+                              } catch (IOException e) {
+                                  e.printStackTrace();
+                              }
+                          });
+                          audioReceiverThread.start();
+                      }
+
+                      @Override
+                      protected void onResume() {
+                          super.onResume();
+                          receiver = new BroadcastReceiver() {
+                              @Override
+                              public void onReceive(Context context, Intent intent) {
+                                  String action = intent.getAction();
+                                  if (WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION.equals(action)) {
+                                      if (manager != null) {
+                                          if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                                              manager.requestPeers(channel, peerListListener);
+                                          }
+                                      }
+                                  } else if (WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION.equals(action)) {
+                                      if (manager != null) {
+                                          manager.requestConnectionInfo(channel, connectionInfoListener);
+                                      }
+                                  }
+                              }
+                          };
+                          registerReceiver(receiver, intentFilter);
+                      }
+
+                      @Override
+                      protected void onPause() {
+                          super.onPause();
+                          unregisterReceiver(receiver);
+                      }
+                  }
+              """
+          }
+
+          for path, content in files.items():
+              full_path = os.path.join("ForestRadioProject", path)
+              os.makedirs(os.path.dirname(full_path), exist_ok=True)
+              clean_content = textwrap.dedent(content).strip() + "\n"
+              with open(full_path, "w", encoding="utf-8") as f:
+                  f.write(clean_content)
+
+          print("Forest Radio Project v2 generated successfully!")
+          EOF
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.4'
+
+      - name: Build Debug APK
+        working-directory: ./ForestRadioProject
+        run: gradle assembleDebug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForestRadio-v2.0-APK
+          path: ForestRadioProject/app/build/outputs/apk/debug/app-debug.apk
