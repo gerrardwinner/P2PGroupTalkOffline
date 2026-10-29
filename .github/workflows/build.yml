@@ -1,4 +1,4 @@
-name: Build Offline Forest Radio APK v2 (Fixed)
+name: Build Offline Forest Radio APK v2 (No Cache)
 
 on:
   push:
@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Generate Forest Radio Project v2.1
+      - name: Generate Forest Radio Project v2.2
         run: |
           python3 - << 'EOF'
           import os
@@ -57,8 +57,8 @@ jobs:
                           applicationId "com.example.forestradio"
                           minSdk 26
                           targetSdk 34
-                          versionCode 3
-                          versionName "2.1"
+                          versionCode 4
+                          versionName "2.2"
                       }
 
                       buildTypes {
@@ -118,7 +118,7 @@ jobs:
                       <TextView
                           android:layout_width="wrap_content"
                           android:layout_height="wrap_content"
-                          android:text="Offline Forest Radio (v2.1)"
+                          android:text="Offline Forest Radio (v2.2)"
                           android:textColor="#a3e4d7"
                           android:textSize="20sp"
                           android:textStyle="bold"
@@ -403,7 +403,7 @@ jobs:
               with open(full_path, "w", encoding="utf-8") as f:
                   f.write(clean_content)
 
-          print("Forest Radio Project v2.1 generated successfully!")
+          print("Forest Radio Project v2.2 generated successfully!")
           EOF
 
       - name: Set up JDK 17
@@ -412,17 +412,12 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.4'
-
       - name: Build Debug APK
         working-directory: ./ForestRadioProject
-        run: gradle assembleDebug
+        run: ./gradlew assembleDebug
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ForestRadio-v2.1-APK
+          name: ForestRadio-v2.2-APK
           path: ForestRadioProject/app/build/outputs/apk/debug/app-debug.apk
