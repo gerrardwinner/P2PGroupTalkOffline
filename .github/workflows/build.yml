@@ -1,4 +1,4 @@
-name: Build Offline Forest Radio APK v2.3
+name: Build Offline Forest Radio APK v2.4
 
 on:
   push:
@@ -18,7 +18,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Generate Forest Radio Project v2.3
+      - name: Generate Forest Radio Project v2.4
         run: |
           python3 - << 'EOF'
           import os
@@ -69,8 +69,8 @@ jobs:
                           applicationId "com.example.forestradio"
                           minSdk 26
                           targetSdk 34
-                          versionCode 5
-                          versionName "2.3"
+                          versionCode 6
+                          versionName "2.4"
                       }
 
                       buildTypes {
@@ -128,40 +128,58 @@ jobs:
                       android:orientation="vertical"
                       android:background="#1b2e1b"
                       android:gravity="center"
-                      android:padding="24dp">
+                      android:padding="20dp">
 
                       <TextView
                           android:layout_width="wrap_content"
                           android:layout_height="wrap_content"
-                          android:text="Offline Forest Radio (v2.3)"
+                          android:text="Offline Forest Radio (v2.4)"
                           android:textColor="#a3e4d7"
                           android:textSize="20sp"
                           android:textStyle="bold"
-                          android:paddingBottom="8dp" />
+                          android:paddingBottom="6dp" />
 
                       <TextView
                           android:id="@+id/tv_status"
-                          android:layout_width="wrap_content"
+                          android:layout_width="match_parent"
                           android:layout_height="wrap_content"
-                          android:text="สถานะ: พร้อมเชื่อมต่อ Wi-Fi Direct"
+                          android:text="เปิด Wi-Fi และ GPS ก่อนใช้งาน\n(ให้เครื่องหนึ่งกดปุ่ม 1 และอีกเครื่องกดปุ่ม 2)"
                           android:textColor="#f9e79f"
                           android:textSize="14sp"
-                          android:paddingBottom="24dp"
+                          android:paddingBottom="18dp"
                           android:gravity="center" />
+
+                      <Button
+                          android:id="@+id/btn_host"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="1. สร้างห้อง (เครื่องแม่ข่าย)"
+                          android:backgroundTint="#117a65"
+                          android:textColor="#ffffff"
+                          android:layout_marginBottom="10dp" />
 
                       <Button
                           android:id="@+id/btn_discover"
                           android:layout_width="match_parent"
                           android:layout_height="wrap_content"
-                          android:text="1. ค้นหาและสร้างกลุ่ม Wi-Fi P2P"
-                          android:backgroundTint="#117a65"
+                          android:text="2. ค้นหาและเกาะกลุ่ม (เครื่องลูกข่าย)"
+                          android:backgroundTint="#2874a6"
                           android:textColor="#ffffff"
-                          android:layout_marginBottom="30dp" />
+                          android:layout_marginBottom="10dp" />
+
+                      <Button
+                          android:id="@+id/btn_reset"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="ล้างสถานะ / รีเซ็ตการเชื่อมต่อ"
+                          android:backgroundTint="#566573"
+                          android:textColor="#ffffff"
+                          android:layout_marginBottom="24dp" />
 
                       <Button
                           android:id="@+id/btn_ptt"
-                          android:layout_width="200dp"
-                          android:layout_height="200dp"
+                          android:layout_width="190dp"
+                          android:layout_height="190dp"
                           android:text="กดค้างเพื่อพูด"
                           android:textSize="18sp"
                           android:textStyle="bold"
@@ -211,11 +229,13 @@ jobs:
                       private IntentFilter intentFilter;
 
                       private TextView tvStatus;
-                      private Button btnDiscover, btnPtt;
+                      private Button btnHost, btnDiscover, btnReset, btnPtt;
 
                       private final List<WifiP2pDevice> peers = new ArrayList<>();
                       private WifiP2pInfo p2pInfo;
                       private volatile boolean isConnected = false;
+                      private volatile boolean isConnecting = false;
+                      private volatile boolean autoConnectWanted = false;
                       private volatile InetAddress lastPeerAddress = null;
 
                       private static final int SAMPLE_RATE = 8000;
@@ -234,7 +254,9 @@ jobs:
                           setContentView(R.layout.activity_main);
 
                           tvStatus = findViewById(R.id.tv_status);
+                          btnHost = findViewById(R.id.btn_host);
                           btnDiscover = findViewById(R.id.btn_discover);
+                          btnReset = findViewById(R.id.btn_reset);
                           btnPtt = findViewById(R.id.btn_ptt);
 
                           requestRequiredPermissions();
@@ -249,7 +271,9 @@ jobs:
                           intentFilter.addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION);
                           intentFilter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
 
-                          btnDiscover.setOnClickListener(v -> discoverPeers());
+                          btnHost.setOnClickListener(v -> createHostGroup());
+                          btnDiscover.setOnClickListener(v -> discoverAndJoin());
+                          btnReset.setOnClickListener(v -> resetP2pState());
 
                           btnPtt.setOnTouchListener((v, event) -> {
                               if (event.getAction() == MotionEvent.ACTION_DOWN) {
@@ -257,7 +281,7 @@ jobs:
                                       btnPtt.setText("กำลังพูด...");
                                       startStreamingAudio();
                                   } else {
-                                      tvStatus.setText("ยังไม่ได้เชื่อมต่อกลุ่ม");
+                                      tvStatus.setText("ยังไม่ได้เชื่อมต่อกลุ่ม (กรุณาเชื่อมต่อก่อน)");
                                   }
                                   return true;
                               } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
@@ -292,46 +316,143 @@ jobs:
                           return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
                       }
 
+                      private String reasonText(int reason) {
+                          if (reason == WifiP2pManager.P2P_UNSUPPORTED) return "อุปกรณ์ไม่รองรับ P2P (1)";
+                          if (reason == WifiP2pManager.BUSY) return "ระบบไม่ว่าง / กรุณาเปิด Wi-Fi & GPS หรือกดรีเซ็ต (2)";
+                          return "ข้อผิดพลาดภายใน (" + reason + ")";
+                      }
+
                       @SuppressLint("MissingPermission")
-                      private void discoverPeers() {
+                      private void createHostGroup() {
                           if (manager == null || channel == null) return;
                           if (!hasWifiP2pPermission()) {
-                              tvStatus.setText("กรุณาอนุญาตสิทธิ์ Location / Nearby Devices ก่อน");
+                              tvStatus.setText("กรุณาอนุญาตสิทธิ์ Location / Nearby ก่อน");
                               requestRequiredPermissions();
                               return;
                           }
+                          autoConnectWanted = false;
+                          isConnecting = false;
+                          tvStatus.setText("กำลังสร้างห้องแม่ข่าย...");
+                          manager.removeGroup(channel, new WifiP2pManager.ActionListener() {
+                              @Override public void onSuccess() { doCreateGroup(); }
+                              @Override public void onFailure(int reason) { doCreateGroup(); }
+                          });
+                      }
+
+                      @SuppressLint("MissingPermission")
+                      private void doCreateGroup() {
+                          manager.createGroup(channel, new WifiP2pManager.ActionListener() {
+                              @Override
+                              public void onSuccess() {
+                                  tvStatus.setText("สร้างห้องสำเร็จ! รอเครื่องลูกข่ายกดปุ่ม 2...");
+                              }
+                              @Override
+                              public void onFailure(int reason) {
+                                  tvStatus.setText("สร้างห้องไม่สำเร็จ: " + reasonText(reason));
+                              }
+                          });
+                      }
+
+                      @SuppressLint("MissingPermission")
+                      private void discoverAndJoin() {
+                          if (manager == null || channel == null) return;
+                          if (!hasWifiP2pPermission()) {
+                              tvStatus.setText("กรุณาอนุญาตสิทธิ์ Location / Nearby ก่อน");
+                              requestRequiredPermissions();
+                              return;
+                          }
+                          autoConnectWanted = true;
+                          isConnecting = false;
+                          tvStatus.setText("กำลังค้นหาเครื่องแม่ข่าย...");
                           manager.discoverPeers(channel, new WifiP2pManager.ActionListener() {
                               @Override
-                              public void onSuccess() { tvStatus.setText("กำลังค้นหาอุปกรณ์..."); }
+                              public void onSuccess() {
+                                  tvStatus.setText("กำลังสแกนหาอุปกรณ์รอบข้าง...");
+                              }
                               @Override
-                              public void onFailure(int reason) { tvStatus.setText("ค้นหาไม่สำเร็จ (รหัส " + reason + ")"); }
+                              public void onFailure(int reason) {
+                                  tvStatus.setText("ค้นหาไม่สำเร็จ: " + reasonText(reason));
+                              }
+                          });
+                      }
+
+                      @SuppressLint("MissingPermission")
+                      private void resetP2pState() {
+                          if (manager == null || channel == null) return;
+                          autoConnectWanted = false;
+                          isConnecting = false;
+                          isConnected = false;
+                          lastPeerAddress = null;
+                          manager.cancelConnect(channel, null);
+                          manager.stopPeerDiscovery(channel, null);
+                          manager.removeGroup(channel, new WifiP2pManager.ActionListener() {
+                              @Override
+                              public void onSuccess() {
+                                  tvStatus.setText("ล้างสถานะเรียบร้อย พร้อมเริ่มใหม่");
+                              }
+                              @Override
+                              public void onFailure(int reason) {
+                                  tvStatus.setText("รีเซ็ตระบบแล้ว พร้อมเริ่มใหม่");
+                              }
                           });
                       }
 
                       private final WifiP2pManager.PeerListListener peerListListener = peerList -> {
                           peers.clear();
                           peers.addAll(peerList.getDeviceList());
-                          if (!peers.isEmpty()) {
-                              WifiP2pDevice target = peers.get(0);
-                              tvStatus.setText("พบอุปกรณ์: " + target.deviceName);
-                              if (!isConnected) {
-                                  connectToDevice(target);
+                          if (peers.isEmpty()) {
+                              if (!isConnected) tvStatus.setText("ยังไม่พบอุปกรณ์รอบตัว (ตรวจดูว่าเปิด Wi-Fi และ GPS แล้ว)");
+                              return;
+                          }
+
+                          for (WifiP2pDevice dev : peers) {
+                              if (dev.status == WifiP2pDevice.CONNECTED) {
+                                  isConnected = true;
+                                  isConnecting = false;
+                                  tvStatus.setText("เชื่อมต่อกับ " + dev.deviceName + " แล้ว!");
+                                  return;
                               }
-                          } else {
-                              tvStatus.setText("ไม่พบอุปกรณ์รอบตัว");
+                              if (dev.status == WifiP2pDevice.INVITED) {
+                                  isConnecting = true;
+                                  tvStatus.setText("รอการตอบรับจาก " + dev.deviceName + " (กดยอมรับบนหน้าจออีกเครื่อง)...");
+                                  return;
+                              }
+                          }
+
+                          WifiP2pDevice target = peers.get(0);
+                          if (autoConnectWanted && !isConnected && !isConnecting && target.status == WifiP2pDevice.AVAILABLE) {
+                              connectToDevice(target);
+                          } else if (!isConnected) {
+                              tvStatus.setText("พบอุปกรณ์: " + target.deviceName);
                           }
                       };
 
                       @SuppressLint("MissingPermission")
                       private void connectToDevice(WifiP2pDevice device) {
                           if (manager == null || channel == null || !hasWifiP2pPermission()) return;
+                          isConnecting = true;
+                          autoConnectWanted = false;
                           WifiP2pConfig config = new WifiP2pConfig();
                           config.deviceAddress = device.deviceAddress;
+
+                          manager.stopPeerDiscovery(channel, new WifiP2pManager.ActionListener() {
+                              @Override public void onSuccess() { initiateConnect(config, device.deviceName); }
+                              @Override public void onFailure(int r) { initiateConnect(config, device.deviceName); }
+                          });
+                      }
+
+                      @SuppressLint("MissingPermission")
+                      private void initiateConnect(WifiP2pConfig config, String name) {
                           manager.connect(channel, config, new WifiP2pManager.ActionListener() {
                               @Override
-                              public void onSuccess() { tvStatus.setText("กำลังเชื่อมต่อกับ " + device.deviceName + "..."); }
+                              public void onSuccess() {
+                                  tvStatus.setText("ส่งคำขอไปที่ " + name + " แล้ว (กรุณากดยอมรับที่เครื่องปลายทาง)");
+                              }
                               @Override
-                              public void onFailure(int reason) { tvStatus.setText("เชื่อมต่อล้มเหลว (รหัส " + reason + ")"); }
+                              public void onFailure(int reason) {
+                                  isConnecting = false;
+                                  tvStatus.setText("เชื่อมต่อล้มเหลว: " + reasonText(reason));
+                              }
                           });
                       }
 
@@ -339,8 +460,12 @@ jobs:
                           p2pInfo = info;
                           if (info != null && info.groupFormed) {
                               isConnected = true;
-                              String role = info.isGroupOwner ? "Group Owner (แม่ข่าย)" : "Client (ลูกข่าย)";
-                              tvStatus.setText("เชื่อมต่อสำเร็จ! (" + role + ") พร้อมใช้งาน");
+                              isConnecting = false;
+                              autoConnectWanted = false;
+                              String role = info.isGroupOwner ? "แม่ข่าย (Host)" : "ลูกข่าย (Client)";
+                              tvStatus.setText("เชื่อมต่อสำเร็จ! สถานะ: " + role + "\nกดปุ่มสีแดงค้างเพื่อพูดได้เลย");
+                          } else {
+                              isConnected = false;
                           }
                       };
 
@@ -437,7 +562,12 @@ jobs:
                               @Override
                               public void onReceive(Context context, Intent intent) {
                                   String action = intent.getAction();
-                                  if (WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION.equals(action)) {
+                                  if (WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION.equals(action)) {
+                                      int state = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1);
+                                      if (state != WifiP2pManager.WIFI_P2P_STATE_ENABLED) {
+                                          tvStatus.setText("กรุณาเปิดสวิตช์ Wi-Fi บนเครื่องก่อนใช้งาน");
+                                      }
+                                  } else if (WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION.equals(action)) {
                                       if (manager != null && hasWifiP2pPermission()) {
                                           manager.requestPeers(channel, peerListListener);
                                       }
@@ -479,7 +609,7 @@ jobs:
               with open(full_path, "w", encoding="utf-8") as f:
                   f.write(clean_content)
 
-          print("Forest Radio Project v2.3 generated successfully!")
+          print("Forest Radio Project v2.4 generated successfully!")
           EOF
 
       - name: Set up Gradle 8.4
@@ -494,6 +624,6 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ForestRadio-v2.3-APK
+          name: ForestRadio-v2.4-APK
           path: ForestRadioProject/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
