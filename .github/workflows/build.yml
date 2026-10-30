@@ -25,7 +25,7 @@ jobs:
           import textwrap
 
           files = {
-              "settings.gradle": """
+              "settings.gradle": r"""
                   pluginManagement {
                       repositories {
                           google()
@@ -44,19 +44,19 @@ jobs:
                   include ':app'
               """,
 
-              "build.gradle": """
+              "build.gradle": r"""
                   plugins {
                       id 'com.android.application' version '8.1.4' apply false
                   }
               """,
 
-              "gradle.properties": """
+              "gradle.properties": r"""
                   org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
                   android.useAndroidX=true
                   android.nonTransitiveRClass=true
               """,
 
-              "app/build.gradle": """
+              "app/build.gradle": r"""
                   plugins {
                       id 'com.android.application'
                   }
@@ -87,7 +87,7 @@ jobs:
                   }
               """,
 
-              "app/src/main/AndroidManifest.xml": """
+              "app/src/main/AndroidManifest.xml": r"""
                   <?xml version="1.0" encoding="utf-8"?>
                   <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -120,7 +120,7 @@ jobs:
                   </manifest>
               """,
 
-              "app/src/main/res/layout/activity_main.xml": """
+              "app/src/main/res/layout/activity_main.xml": r"""
                   <?xml version="1.0" encoding="utf-8"?>
                   <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
                       android:layout_width="match_parent"
@@ -143,7 +143,7 @@ jobs:
                           android:id="@+id/tv_status"
                           android:layout_width="match_parent"
                           android:layout_height="wrap_content"
-                          android:text="เปิด Wi-Fi และ GPS ก่อนใช้งาน\n(ให้เครื่องหนึ่งกดปุ่ม 1 และอีกเครื่องกดปุ่ม 2)"
+                          android:text="เปิด Wi-Fi และ GPS ก่อนใช้งาน&#10;(เครื่องแม่กดปุ่ม 1 / เครื่องลูกกดปุ่ม 2)"
                           android:textColor="#f9e79f"
                           android:textSize="14sp"
                           android:paddingBottom="18dp"
@@ -189,7 +189,7 @@ jobs:
                   </LinearLayout>
               """,
 
-              "app/src/main/java/com/example/forestradio/MainActivity.java": """
+              "app/src/main/java/com/example/forestradio/MainActivity.java": r"""
                   package com.example.forestradio;
 
                   import android.Manifest;
@@ -463,7 +463,7 @@ jobs:
                               isConnecting = false;
                               autoConnectWanted = false;
                               String role = info.isGroupOwner ? "แม่ข่าย (Host)" : "ลูกข่าย (Client)";
-                              tvStatus.setText("เชื่อมต่อสำเร็จ! สถานะ: " + role + "\nกดปุ่มสีแดงค้างเพื่อพูดได้เลย");
+                              tvStatus.setText("เชื่อมต่อสำเร็จ! สถานะ: " + role + " - กดปุ่มสีแดงค้างเพื่อพูดได้เลย");
                           } else {
                               isConnected = false;
                           }
@@ -605,7 +605,7 @@ jobs:
           for path, content in files.items():
               full_path = os.path.join("ForestRadioProject", path)
               os.makedirs(os.path.dirname(full_path), exist_ok=True)
-              clean_content = textwrap.dedent(content).strip() + "\n"
+              clean_content = textwrap.dedent(content).lstrip() + "\n"
               with open(full_path, "w", encoding="utf-8") as f:
                   f.write(clean_content)
 
