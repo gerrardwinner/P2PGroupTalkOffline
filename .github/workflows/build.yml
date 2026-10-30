@@ -5,10 +5,19 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
       - name: Generate Forest Radio Project v2.3
         run: |
           python3 - << 'EOF'
@@ -17,31 +26,34 @@ jobs:
 
           files = {
               "settings.gradle": """
+                  pluginManagement {
+                      repositories {
+                          google()
+                          mavenCentral()
+                          gradlePluginPortal()
+                      }
+                  }
+                  dependencyResolutionManagement {
+                      repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+                      repositories {
+                          google()
+                          mavenCentral()
+                      }
+                  }
                   rootProject.name = "ForestRadio"
                   include ':app'
               """,
 
               "build.gradle": """
-                  buildscript {
-                      repositories {
-                          google()
-                          mavenCentral()
-                      }
-                      dependencies {
-                          classpath 'com.android.tools.build:gradle:8.1.4'
-                      }
-                  }
-                  allprojects {
-                      repositories {
-                          google()
-                          mavenCentral()
-                      }
+                  plugins {
+                      id 'com.android.application' version '8.1.4' apply false
                   }
               """,
 
               "gradle.properties": """
                   org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
                   android.useAndroidX=true
+                  android.nonTransitiveRClass=true
               """,
 
               "app/build.gradle": """
@@ -62,10 +74,12 @@ jobs:
                       }
 
                       buildTypes {
+                          debug { }
                           release {
                               minifyEnabled false
                           }
                       }
+
                       compileOptions {
                           sourceCompatibility JavaVersion.VERSION_17
                           targetCompatibility JavaVersion.VERSION_17
@@ -89,11 +103,12 @@ jobs:
                       <application
                           android:allowBackup="true"
                           android:label="Forest Radio"
-                          android:icon="@android:drawable/ic_menu_mic"
-                          android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                          android:icon="@android:drawable/ic_btn_speak_now"
+                          android:theme="@android:style/Theme.Material.NoActionBar">
 
                           <activity
                               android:name=".MainActivity"
+                              android:configChanges="orientation|screenSize|keyboardHidden"
                               android:exported="true">
                               <intent-filter>
                                   <action android:name="android.intent.action.MAIN" />
@@ -130,7 +145,7 @@ jobs:
                           android:layout_height="wrap_content"
                           android:text="สถานะ: พร้อมเชื่อมต่อ Wi-Fi Direct"
                           android:textColor="#f9e79f"
-                          android:textSize="13sp"
+                          android:textSize="14sp"
                           android:paddingBottom="24dp"
                           android:gravity="center" />
 
@@ -160,6 +175,7 @@ jobs:
                   package com.example.forestradio;
 
                   import android.Manifest;
+                  import android.annotation.SuppressLint;
                   import android.app.Activity;
                   import android.content.BroadcastReceiver;
                   import android.content.Context;
@@ -167,19 +183,20 @@ jobs:
                   import android.content.IntentFilter;
                   import android.content.pm.PackageManager;
                   import android.media.AudioFormat;
+                  import android.media.AudioManager;
                   import android.media.AudioRecord;
                   import android.media.AudioTrack;
                   import android.media.MediaRecorder;
                   import android.net.wifi.p2p.WifiP2pConfig;
                   import android.net.wifi.p2p.WifiP2pDevice;
-                  import android.net.wifi.p2p.WifiP2pDeviceList;
                   import android.net.wifi.p2p.WifiP2pInfo;
                   import android.net.wifi.p2p.WifiP2pManager;
+                  import android.os.Build;
                   import android.os.Bundle;
                   import android.view.MotionEvent;
                   import android.widget.Button;
                   import android.widget.TextView;
-                  import androidx.core.app.ActivityCompat;
+
                   import java.io.IOException;
                   import java.net.DatagramPacket;
                   import java.net.DatagramSocket;
@@ -196,18 +213,21 @@ jobs:
                       private TextView tvStatus;
                       private Button btnDiscover, btnPtt;
 
-                      private List<WifiP2pDevice> peers = new ArrayList<>();
+                      private final List<WifiP2pDevice> peers = new ArrayList<>();
                       private WifiP2pInfo p2pInfo;
-                      private boolean isConnected = false;
+                      private volatile boolean isConnected = false;
+                      private volatile InetAddress lastPeerAddress = null;
 
                       private static final int SAMPLE_RATE = 8000;
                       private static final int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO;
                       private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
-                      private boolean isRecording = false;
+                      private volatile boolean isRecording = false;
+                      private volatile boolean isRunning = true;
                       private Thread audioReceiverThread;
                       private DatagramSocket udpSocket;
                       private static final int PORT = 50005;
 
+                      @SuppressLint("ClickableViewAccessibility")
                       @Override
                       protected void onCreate(Bundle savedInstanceState) {
                           super.onCreate(savedInstanceState);
@@ -217,16 +237,12 @@ jobs:
                           btnDiscover = findViewById(R.id.btn_discover);
                           btnPtt = findViewById(R.id.btn_ptt);
 
-                          ActivityCompat.requestPermissions(this, new String[]{
-                                  Manifest.permission.ACCESS_FINE_LOCATION,
-                                  Manifest.permission.RECORD_AUDIO,
-                                  Manifest.permission.NEARBY_WIFI_DEVICES,
-                                  Manifest.permission.ACCESS_WIFI_STATE,
-                                  Manifest.permission.CHANGE_WIFI_STATE
-                          }, 101);
+                          requestRequiredPermissions();
 
                           manager = (WifiP2pManager) getSystemService(Context.WIFI_P2P_SERVICE);
-                          channel = manager.initialize(this, getMainLooper(), null);
+                          if (manager != null) {
+                              channel = manager.initialize(this, getMainLooper(), null);
+                          }
 
                           intentFilter = new IntentFilter();
                           intentFilter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);
@@ -244,7 +260,7 @@ jobs:
                                       tvStatus.setText("ยังไม่ได้เชื่อมต่อกลุ่ม");
                                   }
                                   return true;
-                              } else if (event.getAction() == MotionEvent.ACTION_UP) {
+                              } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
                                   if (isRecording) {
                                       stopStreamingAudio();
                                       btnPtt.setText("กดค้างเพื่อพูด");
@@ -257,8 +273,33 @@ jobs:
                           startAudioReceiver();
                       }
 
+                      private void requestRequiredPermissions() {
+                          List<String> perms = new ArrayList<>();
+                          perms.add(Manifest.permission.ACCESS_FINE_LOCATION);
+                          perms.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+                          perms.add(Manifest.permission.RECORD_AUDIO);
+                          if (Build.VERSION.SDK_INT >= 33) {
+                              perms.add(Manifest.permission.NEARBY_WIFI_DEVICES);
+                          }
+                          requestPermissions(perms.toArray(new String[0]), 101);
+                      }
+
+                      private boolean hasWifiP2pPermission() {
+                          if (Build.VERSION.SDK_INT >= 33) {
+                              return checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
+                                      || checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+                          }
+                          return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+                      }
+
+                      @SuppressLint("MissingPermission")
                       private void discoverPeers() {
-                          if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return;
+                          if (manager == null || channel == null) return;
+                          if (!hasWifiP2pPermission()) {
+                              tvStatus.setText("กรุณาอนุญาตสิทธิ์ Location / Nearby Devices ก่อน");
+                              requestRequiredPermissions();
+                              return;
+                          }
                           manager.discoverPeers(channel, new WifiP2pManager.ActionListener() {
                               @Override
                               public void onSuccess() { tvStatus.setText("กำลังค้นหาอุปกรณ์..."); }
@@ -271,49 +312,61 @@ jobs:
                           peers.clear();
                           peers.addAll(peerList.getDeviceList());
                           if (!peers.isEmpty()) {
-                              tvStatus.setText("พบอุปกรณ์: " + peers.get(0).deviceName);
-                              connectToDevice(peers.get(0));
+                              WifiP2pDevice target = peers.get(0);
+                              tvStatus.setText("พบอุปกรณ์: " + target.deviceName);
+                              if (!isConnected) {
+                                  connectToDevice(target);
+                              }
                           } else {
                               tvStatus.setText("ไม่พบอุปกรณ์รอบตัว");
                           }
                       };
 
+                      @SuppressLint("MissingPermission")
                       private void connectToDevice(WifiP2pDevice device) {
+                          if (manager == null || channel == null || !hasWifiP2pPermission()) return;
                           WifiP2pConfig config = new WifiP2pConfig();
                           config.deviceAddress = device.deviceAddress;
-                          if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return;
                           manager.connect(channel, config, new WifiP2pManager.ActionListener() {
                               @Override
-                              public void onSuccess() { tvStatus.setText("กำลังเชื่อมต่อ..."); }
+                              public void onSuccess() { tvStatus.setText("กำลังเชื่อมต่อกับ " + device.deviceName + "..."); }
                               @Override
-                              public void onFailure(int reason) { tvStatus.setText("เชื่อมต่อล้มเหลว"); }
+                              public void onFailure(int reason) { tvStatus.setText("เชื่อมต่อล้มเหลว (รหัส " + reason + ")"); }
                           });
                       }
 
                       private final WifiP2pManager.ConnectionInfoListener connectionInfoListener = info -> {
                           p2pInfo = info;
-                          if (info.groupFormed) {
+                          if (info != null && info.groupFormed) {
                               isConnected = true;
-                              tvStatus.setText("เชื่อมต่อสำเร็จ! พร้อมใช้งาน");
+                              String role = info.isGroupOwner ? "Group Owner (แม่ข่าย)" : "Client (ลูกข่าย)";
+                              tvStatus.setText("เชื่อมต่อสำเร็จ! (" + role + ") พร้อมใช้งาน");
                           }
                       };
 
+                      @SuppressLint("MissingPermission")
                       private void startStreamingAudio() {
+                          if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                              tvStatus.setText("ยังไม่ได้อนุญาตสิทธิ์ไมโครโฟน");
+                              return;
+                          }
                           isRecording = true;
                           new Thread(() -> {
                               android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
-                              int bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT);
-                              if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return;
+                              int minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT);
+                              int bufferSize = Math.max(minBuf, 640);
                               AudioRecord recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT, bufferSize);
 
-                              byte[] buffer = new byte[bufferSize];
+                              byte[] buffer = new byte[640];
                               recorder.startRecording();
 
-                              try {
-                                  DatagramSocket socket = new DatagramSocket();
+                              try (DatagramSocket socket = new DatagramSocket()) {
+                                  socket.setBroadcast(true);
                                   InetAddress targetInet;
-                                  if (p2pInfo != null && p2pInfo.groupOwnerAddress != null) {
+                                  if (p2pInfo != null && !p2pInfo.isGroupOwner && p2pInfo.groupOwnerAddress != null) {
                                       targetInet = p2pInfo.groupOwnerAddress;
+                                  } else if (lastPeerAddress != null) {
+                                      targetInet = lastPeerAddress;
                                   } else {
                                       targetInet = InetAddress.getByName("192.168.49.255");
                                   }
@@ -325,11 +378,11 @@ jobs:
                                           socket.send(packet);
                                       }
                                   }
-                                  socket.close();
-                              } catch (IOException e) {
+                              } catch (IOException ignored) {
+                              } finally {
+                                  try { recorder.stop(); } catch (Exception ignored) { }
+                                  recorder.release();
                               }
-                              recorder.stop();
-                              recorder.release();
                           }).start();
                       }
 
@@ -337,14 +390,16 @@ jobs:
                           isRecording = false;
                       }
 
+                      @SuppressWarnings("deprecation")
                       private void startAudioReceiver() {
                           audioReceiverThread = new Thread(() -> {
+                              AudioTrack track = null;
                               try {
                                   udpSocket = new DatagramSocket(PORT);
                                   byte[] buffer = new byte[1024];
-                                  int trackBufSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AUDIO_FORMAT);
-                                  AudioTrack track = new AudioTrack(
-                                          android.media.AudioManager.STREAM_MUSIC,
+                                  int trackBufSize = Math.max(AudioTrack.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AUDIO_FORMAT), 1024);
+                                  track = new AudioTrack(
+                                          AudioManager.STREAM_MUSIC,
                                           SAMPLE_RATE,
                                           AudioFormat.CHANNEL_OUT_MONO,
                                           AUDIO_FORMAT,
@@ -353,17 +408,28 @@ jobs:
                                   );
                                   track.play();
 
-                                  while (true) {
+                                  while (isRunning) {
                                       DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                                       udpSocket.receive(packet);
-                                      track.write(packet.getData(), 0, packet.getLength());
+                                      if (packet.getAddress() != null && !packet.getAddress().isLoopbackAddress()) {
+                                          lastPeerAddress = packet.getAddress();
+                                      }
+                                      if (!isRecording) {
+                                          track.write(packet.getData(), 0, packet.getLength());
+                                      }
                                   }
-                              } catch (IOException e) {
+                              } catch (IOException ignored) {
+                              } finally {
+                                  if (track != null) {
+                                      try { track.stop(); } catch (Exception ignored) { }
+                                      track.release();
+                                  }
                               }
                           });
                           audioReceiverThread.start();
                       }
 
+                      @SuppressLint("MissingPermission")
                       @Override
                       protected void onResume() {
                           super.onResume();
@@ -372,10 +438,8 @@ jobs:
                               public void onReceive(Context context, Intent intent) {
                                   String action = intent.getAction();
                                   if (WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION.equals(action)) {
-                                      if (manager != null) {
-                                          if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                                              manager.requestPeers(channel, peerListListener);
-                                          }
+                                      if (manager != null && hasWifiP2pPermission()) {
+                                          manager.requestPeers(channel, peerListListener);
                                       }
                                   } else if (WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION.equals(action)) {
                                       if (manager != null) {
@@ -390,7 +454,19 @@ jobs:
                       @Override
                       protected void onPause() {
                           super.onPause();
-                          unregisterReceiver(receiver);
+                          if (receiver != null) {
+                              unregisterReceiver(receiver);
+                          }
+                      }
+
+                      @Override
+                      protected void onDestroy() {
+                          isRunning = false;
+                          isRecording = false;
+                          if (udpSocket != null && !udpSocket.isClosed()) {
+                              udpSocket.close();
+                          }
+                          super.onDestroy();
                       }
                   }
               """
@@ -406,21 +482,18 @@ jobs:
           print("Forest Radio Project v2.3 generated successfully!")
           EOF
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Set up Gradle 8.4
+        uses: gradle/actions/setup-gradle@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+          gradle-version: '8.4'
 
       - name: Build Debug APK
         working-directory: ./ForestRadioProject
-        run: gradle assembleDebug
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ForestRadio-v2.3-APK
           path: ForestRadioProject/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
